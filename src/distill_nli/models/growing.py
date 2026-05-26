@@ -21,6 +21,7 @@ from typing import Any
 import torch
 from torch import nn
 
+from distill_nli.growing.attention import GrowableRobertaSelfAttention
 from distill_nli.growing.ffn import GrowableRobertaFFN
 
 
@@ -30,6 +31,18 @@ def _resolve_layer_indices(spec: Any, n_layers: int) -> list[int]:
     if isinstance(spec, (list, tuple)):
         return [int(i) for i in spec]
     raise ValueError(f"Unsupported layers spec: {spec!r}; expected 'all' or a list of ints.")
+
+
+def _wrap_layer_attention(layer: nn.Module, growable: GrowableRobertaSelfAttention) -> None:
+    """Swap layer.attention.self with `growable`. HF's RobertaAttention.forward
+    calls `self.self(...)` and gets back (attn_output, attn_weights); our
+    replacement returns the same tuple shape, so no further patching is needed.
+    """
+    layer.attention.self = growable
+    # nn.Module.__setattr__ does NOT propagate the parent's train/eval state to
+    # newly assigned children. Without this, an eval-mode model would still run
+    # the new module's dropout because growable defaults to training=True.
+    growable.train(layer.training)
 
 
 def _wrap_layer_ffn(layer: nn.Module, growable: GrowableRobertaFFN) -> None:
@@ -55,6 +68,7 @@ def _wrap_layer_ffn(layer: nn.Module, growable: GrowableRobertaFFN) -> None:
         return self.output.LayerNorm(self.output.dropout(ffn_output) + attention_output)
 
     layer.feed_forward_chunk = types.MethodType(_new_feed_forward_chunk, layer)
+    growable.train(layer.training)
 
 
 def make_student_growable(
@@ -97,6 +111,12 @@ def make_student_growable(
             _wrap_layer_ffn(layer, growable)
             registry["ffn"].append(growable)
 
-    # Attention surgery (Phase 3) will fill registry["attention"].
+    attn_cfg = grow_cfg.get("attention", {})
+    if attn_cfg.get("enabled", False):
+        for idx in _resolve_layer_indices(attn_cfg.get("layers", "all"), n_layers):
+            layer = encoder.layer[idx]
+            growable = GrowableRobertaSelfAttention.from_hf(layer.attention.self)
+            _wrap_layer_attention(layer, growable)
+            registry["attention"].append(growable)
 
     return registry

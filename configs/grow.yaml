@@ -29,7 +29,14 @@ ffn:
 
 attention:
   enabled: true
-  layers: all
+  layers: all                         # subset (e.g. [3, 6, 9]) keeps grow-step memory bounded
   p_per_grow: 4                       # added to per-head k_dim per grow step
-  alpha: 1.0e-3
   max_k_per_head: 128                 # hard cap; head_size is 64 in RoBERTa-base
+  top_k: 12                           # heads selected per grow step from ALL candidate heads
+  # TwoShotsIterative knobs (see src/growth/two_shots.py in growing-attention):
+  lambda_reg: 1.0e-3                  # ridge for Step 1 (fixed-arch update)
+  alpha: 1.0e-3                       # ridge for Step 2 (growth update)
+  adaptive_tau: 1.0e-4                # adaptive regularization scale
+  cg_tol: 1.0e-5                      # CG relative-residual tolerance
+  cg_max_iter: 50                     # CG iteration cap per system
+  precision: float64                  # fp64 for the math; CG matvecs run in this dtype
