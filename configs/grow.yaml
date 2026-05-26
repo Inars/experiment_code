@@ -1,7 +1,27 @@
-# TINY-style growing schedule. Composed with configs/train.yaml and configs/distill.yaml.
+# TINY-style growing schedule. Composed with configs/train.yaml; optionally with
+# configs/distill.yaml (when growing during distillation).
+#
+# This config decouples WHAT grows (ffn / attention / both) from WHEN
+# (warmup_epochs, interval_epochs, max_grows). The training script chooses the
+# growth signal: distillation loss when a teacher is present, hard-label CE
+# otherwise (matches growing-attention's signal_source pattern).
 enabled: true
-start_step: 500          # warm up the student before the first growth attempt
-every_n_steps: 1000
-max_grows: 5
-probe_batches: 8         # batches used to accumulate growth statistics
-neurons_per_grow: 32     # cap on neurons added per FFN per grow step
+warmup_epochs: 1                      # epochs of plain training before first grow attempt
+interval_epochs: 1                    # epochs between grow attempts after warmup
+max_grows: 5                          # cap on total grow steps across the run
+num_probe_batches: 8                  # batches used to accumulate growth statistics
+signal_source: distillation           # "distillation" or "supervised" (overridden per script)
+
+ffn:
+  enabled: true
+  layers: all                         # "all" or a list of encoder-layer indices, e.g. [0, 4, 8, 11]
+  neurons_per_grow: 64                # added to intermediate (3072) dim per grow step
+  alpha: 1.0e-3                       # Tikhonov regularization on the (H0+alpha*I) solve
+  max_intermediate: 6144              # hard cap to prevent runaway growth
+
+attention:
+  enabled: true
+  layers: all
+  p_per_grow: 4                       # added to per-head k_dim per grow step
+  alpha: 1.0e-3
+  max_k_per_head: 128                 # hard cap; head_size is 64 in RoBERTa-base
