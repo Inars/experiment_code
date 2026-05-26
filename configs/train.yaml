@@ -1,0 +1,21 @@
+# Shared training-loop settings (used by baseline / distill / distill+grow).
+# Per-script overrides (run_name, distillation loss, growing schedule) live in
+# the script CLI or in distill.yaml / grow.yaml.
+seed: 42
+epochs: 3
+optimizer:
+  name: adamw
+  lr: 2.0e-5
+  weight_decay: 0.01
+scheduler:
+  name: linear_warmup
+  warmup_ratio: 0.06
+grad_accum_steps: 2          # effective batch = data.train_batch_size * grad_accum_steps
+mixed_precision: float32     # MPS bf16 has known gaps in torch 2.12; keep fp32 unless verified
+max_grad_norm: 1.0
+
+eval:
+  every_n_steps: 500
+
+logging:
+  out_dir: experiments

@@ -1,0 +1,7 @@
+# TINY-style growing schedule. Composed with configs/train.yaml and configs/distill.yaml.
+enabled: true
+start_step: 500          # warm up the student before the first growth attempt
+every_n_steps: 1000
+max_grows: 5
+probe_batches: 8         # batches used to accumulate growth statistics
+neurons_per_grow: 32     # cap on neurons added per FFN per grow step
