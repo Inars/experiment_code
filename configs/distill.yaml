@@ -1,0 +1,30 @@
+# Distillation + growing schedule
+seed: 42
+epochs: 3
+optimizer:
+  name: adamw
+  lr: 2.0e-5
+  weight_decay: 0.01
+scheduler:
+  name: linear_warmup
+  warmup_ratio: 0.06
+loss:
+  temperature: 4.0
+  alpha: 0.7         # weight on the soft-target (distillation) loss
+grad_accum_steps: 1
+mixed_precision: bf16   # MPS supports bf16; flip to no for debugging
+
+grow:
+  enabled: true
+  start_step: 500       # warm up the student before the first growth attempt
+  every_n_steps: 1000
+  max_grows: 5
+  probe_batches: 8      # batches used to accumulate growth statistics
+  neurons_per_grow: 32  # cap on neurons added per FFN per grow step
+
+eval:
+  every_n_steps: 500
+
+logging:
+  out_dir: experiments
+  run_name: distill_grow

@@ -1,0 +1,39 @@
+[project]
+name = "distill-nli"
+version = "0.1.0"
+description = "Knowledge distillation from RoBERTa-large-mnli into RoBERTa-base with TINY-style growing."
+readme = "README.md"
+authors = [
+    { name = "Inars", email = "eliesaad1995@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "accelerate>=1.13.0",
+    "datasets>=4.8.5",
+    "evaluate>=0.4.6",
+    "gromo",
+    "numpy>=2.4.6",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
+    "tokenizers>=0.22.2",
+    "torch>=2.12.0",
+    "tqdm>=4.67.3",
+    "transformers>=5.9.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.14",
+]
+
+[tool.uv.sources]
+gromo = { path = "../gromo", editable = true }

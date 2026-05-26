@@ -1,0 +1,4 @@
+model_name: FacebookAI/roberta-large-mnli
+freeze: true
+dtype: float32   # set to "bfloat16" if MPS perf becomes an issue
+device: mps

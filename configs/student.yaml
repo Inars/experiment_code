@@ -1,0 +1,4 @@
+model_name: FacebookAI/roberta-base
+num_labels: 3
+classifier_dropout: 0.1
+device: mps

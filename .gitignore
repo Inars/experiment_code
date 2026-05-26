@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Project artifacts
+experiments/*
+!experiments/.gitkeep
+wandb/
+runs/
+outputs/
+checkpoints/
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+
+# Hugging Face / datasets caches that may slip in if HF_HOME is set locally
+.cache/
+hf_cache/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Notebooks
+.ipynb_checkpoints/

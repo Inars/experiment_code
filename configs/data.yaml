@@ -1,0 +1,10 @@
+dataset_name: SetFit/mnli
+splits:
+  train: train
+  val_matched: validation
+  val_mismatched: validation_mismatched
+max_seq_len: 128
+train_batch_size: 16
+eval_batch_size: 32
+num_workers: 0
+label_order: [contradiction, neutral, entailment]
