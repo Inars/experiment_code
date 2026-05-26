@@ -7,11 +7,12 @@ without re-implementing the optimizer/scheduler/eval/checkpoint scaffolding.
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -20,10 +21,42 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from distill_nli.data.mnli import CANONICAL_LABEL_ORDER, MNLIBatch
+from distill_nli.growing.schedule import GrowthSchedule
 from distill_nli.utils.metrics import accuracy, macro_f1, per_class_accuracy
 
 
 LossFn = Callable[[nn.Module, "MNLIBatch", torch.device], torch.Tensor]
+GrowStepFn = Callable[[nn.Module, list[Any]], dict[str, Any]]
+RebuildOptimFn = Callable[[nn.Module], tuple[torch.optim.Optimizer, Any]]
+
+
+def _summarize_grow(report: dict[str, Any]) -> str:
+    """One-line summary of a grow_step return value for the training log."""
+    parts: list[str] = []
+    ffn = report.get("ffn")
+    if ffn:
+        total = sum(int(v) for v in ffn.values())
+        parts.append(f"ffn={total} neurons across {len(ffn)} layers")
+    attn = report.get("attention")
+    if attn:
+        applied = sum(1 for v in attn.values() if v.get("applied"))
+        k_added = sum(int(v["k_added"]) for v in attn.values() if v.get("applied"))
+        parts.append(f"attn={k_added} k_dim across {applied} heads")
+    return "; ".join(parts) if parts else "no growth applied"
+
+
+def _jsonify_grow_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Convert tuple keys (layer_idx, head_idx) to 'L{li}/H{hi}' strings."""
+    out: dict[str, Any] = {}
+    for kind, value in report.items():
+        if not isinstance(value, dict):
+            out[kind] = value
+            continue
+        if kind == "attention":
+            out[kind] = {f"L{li}/H{hi}": v for (li, hi), v in value.items()}
+        else:
+            out[kind] = {str(k): v for k, v in value.items()}
+    return out
 
 
 @dataclass
@@ -75,6 +108,11 @@ def train(
     eval_every_optim_steps: int,
     run_dir: Path | None,
     log,
+    # Optional growth hook. All three must be set together for growth to fire.
+    growth_schedule: GrowthSchedule | None = None,
+    do_grow: GrowStepFn | None = None,
+    rebuild_optimizer: RebuildOptimFn | None = None,
+    num_probe_batches: int = 0,
 ) -> tuple[EvalResult, dict[str, float]]:
     metrics_path = run_dir / "metrics.jsonl" if run_dir is not None else None
     if metrics_path is not None:
@@ -119,6 +157,25 @@ def train(
                 pbar.set_postfix(loss=f"{running_loss/max(1,running_n):.4f}", step=optim_step)
 
         log.info(f"epoch {epoch+1} done | avg train loss = {running_loss/max(1,running_n):.4f}")
+
+        # ----- end-of-epoch growth hook -----
+        if (
+            growth_schedule is not None
+            and do_grow is not None
+            and growth_schedule.is_growth_epoch(epoch)
+        ):
+            probe = list(itertools.islice(val_loader, max(1, num_probe_batches)))
+            log.info(f"[epoch {epoch+1}] growth attempt ({len(probe)} probe batches)...")
+            grow_metrics = do_grow(model, probe)
+            growth_schedule.record_grow()
+            log.info(f"  growth done: {_summarize_grow(grow_metrics)}")
+            if metrics_path is not None:
+                jsonable = _jsonify_grow_report(grow_metrics)
+                with open(metrics_path, "a") as f:
+                    f.write(json.dumps({"event": "grow", "epoch": epoch + 1, **jsonable}, default=str) + "\n")
+            if rebuild_optimizer is not None:
+                optimizer, scheduler = rebuild_optimizer(model)
+                log.info("  optimizer + scheduler rebuilt after grow")
 
     final, preds, labels = evaluate(model, val_loader, device)
     final.step = optim_step

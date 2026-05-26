@@ -1,14 +1,11 @@
-"""Headline experiment: distillation from RoBERTa-large-mnli + TINY growing.
+"""Ablation: RoBERTa-base + TINY growing, hard-label CE only (no distillation).
 
-Combines:
-- frozen teacher (FacebookAI/roberta-large-mnli, logits remapped to canonical order)
-- student (FacebookAI/roberta-base) with growable FFN and attention modules
-- distillation loss (KL with temperature + hard CE blend)
-- TINY-style growth steps using the distillation loss as the growth signal
+Symmetric counterpart to train_distill.py: tests "growth alone" vs "distillation
+alone" vs "distillation + growth" (the headline experiment).
 
 Usage:
-    uv run python scripts/train_distill_grow.py [--train-limit N] [--epochs E] \
-        [--temperature T] [--alpha A] [--run-name NAME] [--no-save]
+    uv run python scripts/train_grow.py [--train-limit N] [--epochs E] \
+        [--run-name NAME] [--no-save]
 """
 
 from __future__ import annotations
@@ -21,6 +18,7 @@ import argparse  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import torch  # noqa: E402
+from torch.nn import functional as F  # noqa: E402
 from torch.optim import AdamW  # noqa: E402
 from transformers import get_linear_schedule_with_warmup  # noqa: E402
 
@@ -30,12 +28,10 @@ from distill_nli.data.mnli import (  # noqa: E402
     make_dataloader,
     tokenize_split,
 )
-from distill_nli.distillation.losses import distillation_loss  # noqa: E402
 from distill_nli.growing import grow_step  # noqa: E402
 from distill_nli.growing.schedule import GrowthSchedule  # noqa: E402
 from distill_nli.models.growing import make_student_growable  # noqa: E402
 from distill_nli.models.student import load_student  # noqa: E402
-from distill_nli.models.teacher import load_teacher  # noqa: E402
 from distill_nli.training.loop import train  # noqa: E402
 from distill_nli.utils.config import load_yaml  # noqa: E402
 from distill_nli.utils.logging import get_logger  # noqa: E402
@@ -47,18 +43,13 @@ from gromo.utils.utils import set_device  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 
 
-def make_distill_loss(teacher: torch.nn.Module, *, temperature: float, alpha: float):
-    def _loss(student: torch.nn.Module, batch: MNLIBatch, device: torch.device) -> torch.Tensor:
+def make_hard_ce_loss():
+    def _loss(model: torch.nn.Module, batch: MNLIBatch, device: torch.device) -> torch.Tensor:
         ids = batch.input_ids.to(device)
         msk = batch.attention_mask.to(device)
         lbl = batch.labels.to(device)
-        with torch.no_grad():
-            t_logits = teacher(ids, msk)
-        s_logits = student(input_ids=ids, attention_mask=msk).logits
-        loss, _, _ = distillation_loss(
-            s_logits, t_logits, lbl, temperature=temperature, alpha=alpha,
-        )
-        return loss
+        logits = model(input_ids=ids, attention_mask=msk).logits
+        return F.cross_entropy(logits, lbl)
     return _loss
 
 
@@ -80,17 +71,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-cfg", default=str(REPO / "configs/data.yaml"))
     parser.add_argument("--student-cfg", default=str(REPO / "configs/student.yaml"))
-    parser.add_argument("--teacher-cfg", default=str(REPO / "configs/teacher.yaml"))
     parser.add_argument("--train-cfg", default=str(REPO / "configs/train.yaml"))
-    parser.add_argument("--distill-cfg", default=str(REPO / "configs/distill.yaml"))
     parser.add_argument("--grow-cfg", default=str(REPO / "configs/grow.yaml"))
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--val-limit", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--eval-every", type=int, default=None)
-    parser.add_argument("--temperature", type=float, default=None)
-    parser.add_argument("--alpha", type=float, default=None)
-    parser.add_argument("--run-name", default="distill_grow")
+    parser.add_argument("--run-name", default="grow")
     parser.add_argument("--no-save", action="store_true")
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
@@ -98,45 +85,32 @@ def main() -> None:
     log = get_logger()
     data_cfg = load_yaml(args.data_cfg)
     student_cfg = load_yaml(args.student_cfg)
-    teacher_cfg = load_yaml(args.teacher_cfg)
     train_cfg = load_yaml(args.train_cfg)
-    distill_cfg = load_yaml(args.distill_cfg)
     grow_cfg = load_yaml(args.grow_cfg)
-    grow_cfg["signal_source"] = "distillation"
+    # This script does not use a teacher; growth uses the supervised loss.
+    grow_cfg["signal_source"] = "supervised"
 
     seed = args.seed if args.seed is not None else int(train_cfg["seed"])
     seed_everything(seed)
 
     epochs = int(args.epochs if args.epochs is not None else train_cfg["epochs"])
     eval_every = int(args.eval_every if args.eval_every is not None else train_cfg["eval"]["every_n_steps"])
-    T = float(args.temperature if args.temperature is not None else distill_cfg["loss"]["temperature"])
-    alpha = float(args.alpha if args.alpha is not None else distill_cfg["loss"]["alpha"])
 
     device = torch.device(student_cfg["device"] if torch.backends.mps.is_available() else "cpu")
     set_device(str(device))
     log.info(f"device: {device} | seed: {seed} | epochs: {epochs}")
-    log.info(f"distillation: T={T} | alpha={alpha}")
     log.info(
         f"growth: ffn={grow_cfg['ffn']['enabled']} attn={grow_cfg['attention']['enabled']} "
         f"warmup={grow_cfg['warmup_epochs']} interval={grow_cfg['interval_epochs']} max={grow_cfg['max_grows']}",
     )
 
-    # ----- models -----
-    student, s_tok = load_student(student_cfg, device=device)
-    teacher, t_tok = load_teacher(teacher_cfg, device=device)
-    if s_tok.vocab_size != t_tok.vocab_size:
-        raise RuntimeError(
-            f"student vocab ({s_tok.vocab_size}) != teacher vocab ({t_tok.vocab_size}); "
-            "tokenizing once with the student tokenizer is unsafe.",
-        )
-
-    # Surgery: install growable FFN / attention modules per grow_cfg.
+    # ----- model + surgery -----
+    student, tokenizer = load_student(student_cfg, device=device)
     registry = make_student_growable(student, grow_cfg)
     n_params = sum(p.numel() for p in student.parameters() if p.requires_grad)
     log.info(f"student trainable: {n_params/1e6:.1f}M | growable ffn: {len(registry['ffn'])} | growable attn: {len(registry['attention'])}")
-    log.info("teacher frozen     (logits permuted to canonical label order)")
 
-    # ----- data (tokenize with student tokenizer; vocab parity verified above) -----
+    # ----- data -----
     ds_train = load_split(data_cfg, "train")
     ds_val = load_split(data_cfg, "val")
     if args.train_limit is not None:
@@ -145,14 +119,14 @@ def main() -> None:
         ds_val = ds_val.select(range(min(args.val_limit, len(ds_val))))
     log.info(f"train: {len(ds_train)} | val: {len(ds_val)}")
 
-    ds_train_tok = tokenize_split(ds_train, s_tok, data_cfg)
-    ds_val_tok = tokenize_split(ds_val, s_tok, data_cfg)
+    ds_train_tok = tokenize_split(ds_train, tokenizer, data_cfg)
+    ds_val_tok = tokenize_split(ds_val, tokenizer, data_cfg)
     train_loader = make_dataloader(
-        ds_train_tok, s_tok, batch_size=data_cfg["train_batch_size"],
+        ds_train_tok, tokenizer, batch_size=data_cfg["train_batch_size"],
         shuffle=True, num_workers=data_cfg["num_workers"],
     )
     val_loader = make_dataloader(
-        ds_val_tok, s_tok, batch_size=data_cfg["eval_batch_size"],
+        ds_val_tok, tokenizer, batch_size=data_cfg["eval_batch_size"],
         shuffle=False, num_workers=data_cfg["num_workers"],
     )
 
@@ -161,6 +135,7 @@ def main() -> None:
     total_optim_steps = (len(train_loader) // grad_accum) * epochs
     optimizer, scheduler = _build_optim_and_sched(student, train_cfg, total_optim_steps)
 
+    # ----- run dir -----
     run_dir: Path | None = None
     if not args.no_save:
         run_dir = REPO / train_cfg["logging"]["out_dir"] / args.run_name
@@ -168,7 +143,7 @@ def main() -> None:
     log.info(f"run_dir: {run_dir}")
 
     # ----- growth hook closures -----
-    compute_loss = make_distill_loss(teacher, temperature=T, alpha=alpha)
+    compute_loss = make_hard_ce_loss()
 
     def grow_loss_fn(model: torch.nn.Module, batch: MNLIBatch) -> torch.Tensor:
         return compute_loss(model, batch, device)
@@ -187,6 +162,7 @@ def main() -> None:
         max_grows=int(grow_cfg["max_grows"]),
     )
 
+    # ----- train -----
     train(
         model=student,
         train_loader=train_loader,
