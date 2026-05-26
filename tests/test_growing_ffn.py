@@ -14,9 +14,16 @@ from distill_nli.models.growing import make_student_growable
 STUDENT_NAME = "FacebookAI/roberta-base"
 
 
+requires_mps = pytest.mark.skipif(
+    not torch.backends.mps.is_available(),
+    reason="MPS not available on this machine.",
+)
+
+
 @pytest.fixture(scope="module")
 def device() -> torch.device:
-    return torch.device("cpu")   # CPU is enough for these tiny forward passes; deterministic
+    # Tests run on MPS to match the device the project actually trains on.
+    return torch.device("mps")
 
 
 @pytest.fixture
@@ -49,6 +56,7 @@ def _forward(model, batch) -> torch.Tensor:
     return out.logits
 
 
+@requires_mps
 def test_ffn_wrap_preserves_forward(student, batch):
     """After FFN surgery on all 12 layers, forward output is unchanged to fp32 tolerance."""
     logits_before = _forward(student, batch).clone()
@@ -63,6 +71,7 @@ def test_ffn_wrap_preserves_forward(student, batch):
     )
 
 
+@requires_mps
 def test_ffn_grow_step_increases_intermediate_dim(student, batch, device):
     """One TINY-style grow step should add neurons to the bottleneck of each FFN."""
     grow_cfg = {"ffn": {"enabled": True, "layers": [0, 6]}}   # just two layers to keep test fast
