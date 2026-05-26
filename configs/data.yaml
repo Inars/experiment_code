@@ -1,10 +1,16 @@
 dataset_name: SetFit/mnli
 splits:
   train: train
-  val_matched: validation
-  val_mismatched: validation_mismatched
+  val: validation
+  test: test
+text1_field: text1     # premise
+text2_field: text2     # hypothesis
+label_field: label
 max_seq_len: 128
 train_batch_size: 16
 eval_batch_size: 32
 num_workers: 0
-label_order: [contradiction, neutral, entailment]
+# Canonical label order used throughout this project (matches SetFit/mnli).
+# Teacher (FacebookAI/roberta-large-mnli) uses the reversed order
+# {CONTRADICTION:0, NEUTRAL:1, ENTAILMENT:2} and is remapped at the wrapper.
+label_order: [entailment, neutral, contradiction]

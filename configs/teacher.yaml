@@ -1,4 +1,6 @@
 model_name: FacebookAI/roberta-large-mnli
 freeze: true
-dtype: float32   # set to "bfloat16" if MPS perf becomes an issue
+dtype: float32   # bf16 on MPS is flaky in torch 2.12 for some ops; keep fp32 for eval
 device: mps
+# Teacher's native label order — remapped to the project's canonical order in models/teacher.py
+native_label_order: [contradiction, neutral, entailment]
