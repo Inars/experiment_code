@@ -661,9 +661,17 @@ def _apply_head_growth(
 
         new_W_Q = torch.cat([head.W_Q.data + dQ, tQ], dim=1)
         new_W_K = torch.cat([head.W_K.data + dK, tK], dim=1)
+        # b_Q and b_K must grow alongside W_Q and W_K (zero-init the new
+        # entries: new neurons start with no bias, matching how Linear init
+        # would handle freshly-added output features).
+        zero_pad = torch.zeros(p, device=target_device, dtype=target_dtype)
+        new_b_Q = torch.cat([head.b_Q.data, zero_pad], dim=0)
+        new_b_K = torch.cat([head.b_K.data, zero_pad], dim=0)
 
         head.W_Q = nn.Parameter(new_W_Q)
         head.W_K = nn.Parameter(new_W_K)
+        head.b_Q = nn.Parameter(new_b_Q)
+        head.b_K = nn.Parameter(new_b_K)
 
         head.k_dim += p
         head.kappa.data = torch.tensor(
