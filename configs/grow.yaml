@@ -10,7 +10,15 @@ warmup_epochs: 1                      # epochs of plain training before first gr
 interval_epochs: 1                    # epochs between grow attempts after warmup
 max_grows: 5                          # cap on total grow steps across the run
 num_probe_batches: 8                  # batches used to accumulate growth statistics
-signal_source: distillation           # "distillation" or "supervised" (overridden per script)
+
+# `signal_source` is the loss used to drive the growth statistics. The default
+# below is a placeholder — each training script overrides it at runtime to match
+# its own loss (train_grow.py -> "supervised", train_distill_grow.py ->
+# "distillation"). Matches the growing-attention pattern.
+signal_source: distillation           # "distillation" | "supervised"
+
+optimizer:
+  reset_after_grow: true              # rebuild AdamW after a successful grow (resets momentum)
 
 ffn:
   enabled: true
